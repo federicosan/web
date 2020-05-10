@@ -10,14 +10,19 @@ from django.utils import timezone
 
 import metadata_parser
 from app.redis_service import RedisService
-from dashboard.models import Activity, HackathonEvent, Profile, get_my_earnings_counter_profiles, get_my_grants
+from dashboard.helpers import load_files_in_directory
+from dashboard.models import (
+    Activity, HackathonEvent, Profile, TribeMember, get_my_earnings_counter_profiles, get_my_grants,
+)
 from kudos.models import Token
 from marketing.mails import comment_email, new_action_request
 from perftools.models import JSONStore
 from ratelimit.decorators import ratelimit
 from retail.views import get_specific_activities
 
-from .models import Announcement, Comment, Flag, Like, MatchRanking, MatchRound, Offer, OfferAction, SuggestedAction
+from .models import (
+    Announcement, Comment, Favorite, Flag, Like, MatchRanking, MatchRound, Offer, OfferAction, SuggestedAction,
+)
 from .tasks import increment_offer_view_counts
 from .utils import is_user_townsquare_enabled
 
@@ -32,6 +37,16 @@ tags = [
     ['#other','briefcase','search-other'],
     ]
 
+
+def load_wallpapers(request):
+    """Load profile banners"""
+    images_with_icons = load_files_in_directory('status_backgrounds')
+    images = [image.split('.')[0] for image in images_with_icons if 'icon' not in image]
+    response = {
+        'status': 200,
+        'wallpapers': images
+    }
+    return JsonResponse(response, safe=False)
 
 def get_next_time_available(key):
     d = timezone.now()
@@ -102,8 +117,8 @@ def get_sidebar_tabs(request):
             }
             tabs = [new_tab] + tabs
             default_tab = 'my_tribes'
-        num_grants_relationships = (len(set(get_my_grants(request.user.profile))))
 
+        num_grants_relationships = (len(set(get_my_grants(request.user.profile))))
         if num_grants_relationships:
             key = 'grants'
             new_tab = {
@@ -114,6 +129,20 @@ def get_sidebar_tabs(request):
             }
             tabs = [new_tab] + tabs
             default_tab = 'grants'
+
+        num_favorites = request.user.favorites.all().count()
+        if num_favorites:
+            key = 'my_favorites'
+            activities = get_specific_activities(key, False, request.user, request.session.get(key, 0)).count()
+            new_tab = {
+                'title': f"My Favorites",
+                'slug': key,
+                'helper_text': f'Activity that you marked as favorite',
+                'badge': max_of_ten(activities) if request.GET.get(
+                    'tab') != key else 0
+            }
+            tabs = [new_tab] + tabs
+            default_tab = 'my_favorites'
 
         threads_last_24_hours = max_of_ten(request.user.profile.subscribed_threads.filter(pk__gt=request.session.get('my_threads', 0)).count())  if request.GET.get('tab') != 'my_threads' else 0
 
@@ -142,7 +171,9 @@ def get_sidebar_tabs(request):
     }
     tabs = tabs + [connect]
 
-    hackathons = HackathonEvent.objects.filter(start_date__lt=timezone.now() + timezone.timedelta(days=10), end_date__gt=timezone.now())
+    start_date = timezone.now() + timezone.timedelta(days=10)
+    end_date = timezone.now() - timezone.timedelta(days=7)
+    hackathons = HackathonEvent.objects.filter(start_date__lt=start_date, end_date__gt=end_date, visible=True)
     if hackathons.count():
         for hackathon in hackathons:
             connect = {
@@ -261,6 +292,28 @@ def get_param_metadata(request, tab):
             print(e)
     return title, desc, page_seo_text_insert, avatar_url, is_direct_link, admin_link
 
+
+def get_suggested_tribes(request):
+    following_tribes = []
+    if request.user.is_authenticated:
+        handles = TribeMember.objects.filter(profile=request.user.profile).distinct('org').values_list('org__handle', flat=True)
+        tribes = Profile.objects.filter(is_org=True).exclude(handle__in=list(handles)).order_by('-follower_count')[:5]
+
+        for profile in tribes:
+            handle = profile.handle
+            last_24_hours_activity = 0  # TODO: integrate this with get_amount_unread
+            tribe = {
+                'title': handle,
+                'slug': f"tribe:{handle}",
+                'helper_text': f'Activities from @{handle} since you last checked',
+                'badge': last_24_hours_activity,
+                'avatar_url': f'/dynamic/avatar/{handle}',
+                'follower_count': profile.tribe_members.all().count()
+            }
+            following_tribes = following_tribes + [tribe]
+    return following_tribes
+
+
 def get_following_tribes(request):
     following_tribes = []
     if request.user.is_authenticated:
@@ -282,8 +335,6 @@ def town_square(request):
     SHOW_DRESSING = request.GET.get('dressing', False)
     tab = request.GET.get('tab', request.COOKIES.get('tab', 'connect'))
     title, desc, page_seo_text_insert, avatar_url, is_direct_link, admin_link = get_param_metadata(request, tab)
-    max_length_offset = abs(((request.user.profile.created_on if request.user.is_authenticated else timezone.now()) - timezone.now()).days)
-    max_length = 280 + max_length_offset
     if not SHOW_DRESSING:
         is_search = "activity:" in tab or "search-" in tab
         trending_only = int(request.GET.get('trending', 0))
@@ -299,8 +350,6 @@ def town_square(request):
             'target': f'/activity?what={tab}&trending_only={trending_only}',
             'tab': tab,
             'tags': tags,
-            'max_length': max_length,
-            'max_length_offset': max_length_offset,
             'admin_link': admin_link,
             'now': timezone.now(),
             'is_townsquare': True,
@@ -315,6 +364,7 @@ def town_square(request):
     announcements = Announcement.objects.current().filter(key='townsquare')
     view_tags = get_tags(request)
     following_tribes = get_following_tribes(request)
+    suggested_tribes = get_suggested_tribes(request)
 
     # render page context
     trending_only = int(request.GET.get('trending', 0))
@@ -345,8 +395,16 @@ def town_square(request):
         'announcements': announcements,
         'is_subscribed': is_subscribed,
         'offers_by_category': offers_by_category,
-        'following_tribes': following_tribes
+        'following_tribes': following_tribes,
+        'suggested_tribes': suggested_tribes,
     }
+
+    if 'tribe:' in tab:
+        key = tab.split(':')[1]
+        profile = Profile.objects.get(handle=key.lower())
+        if profile.is_org:
+            context['tribe'] = profile
+
     response = TemplateResponse(request, 'townsquare/index.html', context)
     if request.GET.get('tab'):
         if ":" not in request.GET.get('tab'):
@@ -419,6 +477,8 @@ def api(request, activity_id):
             counter += 1; results[counter] += time.time() - start_time; start_time = time.time()
             comment_dict['sorted_match_curve'] = comment.profile.matchranking_this_round.sorted_match_curve if comment.profile.matchranking_this_round else None
             counter += 1; results[counter] += time.time() - start_time; start_time = time.time()
+            if comment.is_edited:
+                comment_dict['is_edited'] = comment.is_edited
             response['comments'].append(comment_dict)
         for key, val in results.items():
             if settings.DEBUG:
@@ -465,6 +525,15 @@ def api(request, activity_id):
                 Like.objects.create(profile=request.user.profile, activity=activity)
         if request.POST['direction'] == 'unliked':
             activity.likes.filter(profile=request.user.profile).delete()
+
+    # like request
+    elif request.POST.get('method') == 'favorite':
+        if request.POST['direction'] == 'favorite':
+            already_likes = Favorite.objects.filter(activity=activity, user=request.user).exists()
+            if not already_likes:
+                Favorite.objects.create(user=request.user, activity=activity)
+        elif request.POST['direction'] == 'unfavorite':
+            Favorite.objects.filter(user=request.user, activity=activity).delete()
 
     # flag request
     elif request.POST.get('method') == 'flag':
@@ -536,6 +605,28 @@ def comment_v1(request, comment_id):
         response = {
             'status': 204,
             'message': 'comment successfully deleted'
+        }
+        return JsonResponse(response)
+
+    if method == 'EDIT':
+        content = request.POST.get('comment')
+        title = request.POST.get('comment')
+
+        comment.comment = content
+        comment.is_edited = True
+        comment.save()
+        response = {
+            'status': 203,
+            'message': 'comment successfully updated'
+        }
+        return JsonResponse(response)
+
+    # no perms needed responses go here
+    if request.GET.get('method') == 'GET_COMMENT':
+        response = {
+            'status': 202,
+            'message': 'comment successfully retrieved',
+            'comment': comment.comment,
         }
         return JsonResponse(response)
 

@@ -28,7 +28,7 @@ from django.contrib.admin.views.decorators import staff_member_required
 from django.core.exceptions import ValidationError
 from django.core.paginator import Paginator
 from django.core.validators import validate_email
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Subquery
 from django.http import Http404, JsonResponse
 from django.shortcuts import redirect
 from django.template.response import TemplateResponse
@@ -41,7 +41,8 @@ from django.views.decorators.csrf import csrf_exempt
 
 from app.utils import get_default_network, get_profiles_from_text
 from cacheops import cached_as, cached_view, cached_view_as
-from dashboard.models import Activity, Bounty, HackathonEvent, Profile, get_my_earnings_counter_profiles, get_my_grants
+from dashboard.models import Activity, Bounty, HackathonEvent, Profile, get_my_earnings_counter_profiles, get_my_grants, \
+    TribeMember
 from dashboard.notifications import amount_usdt_open_work, open_bounties
 from dashboard.tasks import grant_update_email_task
 from economy.models import Token
@@ -55,7 +56,7 @@ from retail.helpers import get_ip
 from townsquare.tasks import increment_view_counts
 
 from .forms import FundingLimitIncreaseRequestForm
-from .utils import programming_languages
+from .utils import programming_languages, articles, press, testimonials, reasons
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,6 @@ def get_activities(tech_stack=None, num_activities=15):
 
 
 def index(request):
-
     products = [
         {
             'group' : 'grow_oss',
@@ -142,200 +142,17 @@ def index(request):
         }
     ]
 
-    press = [
-        {
-            'link': 'https://twit.tv/shows/floss-weekly/episodes/474',
-            'img' : 'v2/images/press/floss_weekly.jpg'
-        },
-        {
-            'link': 'https://epicenter.tv/episode/257/',
-            'img' : 'v2/images/press/epicenter.jpg'
-        },
-        {
-            'link': 'http://www.ibtimes.com/how-web-30-will-protect-our-online-identity-2667000',
-            'img': 'v2/images/press/ibtimes.jpg'
-        },
-        {
-            'link': 'https://www.forbes.com/sites/jeffersonnunn/2019/01/21/bitcoin-autonomous-employment-workers-wanted/',
-            'img': 'v2/images/press/forbes.jpg'
-        },
-        {
-            'link': 'https://unhashed.com/cryptocurrency-news/gitcoin-introduces-collectible-kudos-rewards/',
-            'img': 'v2/images/press/unhashed.jpg'
-        },
-        {
-            'link': 'https://www.coindesk.com/meet-dapp-market-twist-open-source-winning-developers/',
-            'img': 'v2/images/press/coindesk.png'
-        },
-        {
-            'link': 'https://softwareengineeringdaily.com/2018/04/03/gitcoin-open-source-bounties-with-kevin-owocki/',
-            'img': 'v2/images/press/se_daily.png'
-        },
-        {
-            'link': 'https://www.ethnews.com/gitcoin-offers-bounties-for-ens-integration-into-dapps',
-            'img': 'v2/images/press/ethnews.jpg'
-        },
-        {
-            'link': 'https://www.hostingadvice.com/blog/grow-open-source-projects-with-gitcoin/',
-            'img': 'v2/images/press/hosting-advice.png'
-        }
-    ]
-
-    articles = [
-        {
-            'link': 'https://medium.com/gitcoin/progressive-elaboration-of-scope-on-gitcoin-3167742312b0',
-            'img': static("v2/images/medium/1.png"),
-            'title': _('Progressive Elaboration of Scope on Gitcoin'),
-            'description': _('What is it? Why does it matter? How can you deal with it on Gitcoin?'),
-            'alt': 'gitcoin scope'
-        },
-        {
-            'link': 'https://gitcoin.co/blog/commit-reveal-scheme-on-ethereum/',
-            'img': static("v2/images/medium/2.png"),
-            'title': _('Commit Reveal Scheme on Ethereum'),
-            'description': _('Hiding Actions and Generating Random Numbers'),
-            'alt': 'commit reveal scheme'
-        },
-        {
-            'link': 'https://medium.com/gitcoin/announcing-open-kudos-e437450f7802',
-            'img': static("v2/images/medium/3.png"),
-            'title': _('Announcing Open Kudos'),
-            'description': _('Our vision for integrating Kudos in any (d)App'),
-            'alt': 'open kudos'
-        }
-    ]
-
     context = {
         'products': products,
         'know_us': know_us,
-        'press': press,
-        'articles': articles,
+        'press': press(),
+        'articles': articles(),
         'hide_newsletter_caption': True,
         'hide_newsletter_consent': True,
         'newsletter_headline': _("Get the Latest Gitcoin News! Join Our Newsletter."),
-        'title': _('Grow Open Source: Get crowdfunding and find freelance developers for your software projects, paid in crypto')
+        'title': _('Grow Open Source: Get crowdfunding and find freelance developers for your software projects, paid in crypto'),
     }
     return TemplateResponse(request, 'home/index.html', context)
-
-
-@staff_member_required
-def pricing(request):
-
-    plans= [
-        {
-            'type': 'basic',
-            'img': 'v2/images/pricing/basic.svg',
-            'fee': 10,
-            'features': [
-                '1 free <a href="/kudos">Kudos</a>',
-                'Community Support'
-            ],
-            'features_na': [
-                'Job Board Access',
-                'Contributor Stats',
-                'Multi-Seg Wallet',
-                'Featured Bounties',
-                'Job Listing'
-            ]
-        },
-        {
-            'type': 'pro',
-            'img': 'v2/images/pricing/pro.svg',
-            'price': 40,
-            'features': [
-                '5 Free <a href="/kudos">Kudos</a> / mo',
-                'Community Support',
-                'Job Board - Limited',
-                'Contributor Stats'
-            ],
-            'features_na': [
-                'Multi-Seg Wallet',
-                'Featured Bounties',
-                'Job Listings'
-            ]
-        },
-        {
-            'type': 'max',
-            'img': 'v2/images/pricing/max.svg',
-            'price': 99,
-            'features': [
-                '5 Free <a href="/kudos">Kudos</a> / mo',
-                'Community Support',
-                'Job Board Access',
-                'Contributor Stats',
-                'Multi-Sig Wallet',
-                '5 Featured Bounties',
-                '5 Job Listings'
-            ]
-        }
-    ]
-
-    companies = [
-        {
-            'name': 'Market Protocol',
-            'img': 'v2/images/project_logos/market.png'
-        },
-        {
-            'name': 'Consensys',
-            'img': 'v2/images/consensys.svg'
-        },
-        {
-            'name': 'Metamask',
-            'img': 'v2/images/project_logos/metamask.png'
-        },
-        {
-            'name': 'Ethereum Foundation',
-            'img': 'v2/images/project_logos/eth.png'
-        },
-        {
-            'name': 'Truffle',
-            'img': 'v2/images/project_logos/truffle.png'
-        },
-    ]
-
-    context = {
-        'plans': plans,
-        'companies': companies
-    }
-
-    return TemplateResponse(request, 'pricing/plans.html', context)
-
-
-@staff_member_required
-def subscribe(request):
-
-    if request.POST:
-        return TemplateResponse(request, 'pricing/subscribe.html', {})
-
-    from gas.utils import conf_time_spread, eth_usd_conv_rate, gas_advisories, recommend_min_gas_price_to_confirm_in_time
-
-    plan = {
-        'type': 'pro',
-        'img': 'v2/images/pricing/sub_pro.svg',
-        'price': 40
-    }
-
-    if request.GET:
-        if 'plan' in request.GET and request.GET['plan'] == 'max':
-            plan = {
-                'type': 'max',
-                'img': 'v2/images/pricing/sub_max.svg',
-                'price': 99
-            }
-        if 'pack' in request.GET and request.GET['pack'] == 'annual':
-            plan['price'] = plan['price'] - plan['price'] / 10
-
-    context = {
-        'plan': plan,
-        'recommend_gas_price': recommend_min_gas_price_to_confirm_in_time(4),
-        'recommend_gas_price_slow': recommend_min_gas_price_to_confirm_in_time(120),
-        'recommend_gas_price_avg': recommend_min_gas_price_to_confirm_in_time(15),
-        'recommend_gas_price_fast': recommend_min_gas_price_to_confirm_in_time(1),
-        'eth_usd_conv_rate': eth_usd_conv_rate(),
-        'conf_time_spread': conf_time_spread(),
-        'gas_advisories': gas_advisories(),
-    }
-    return TemplateResponse(request, 'pricing/subscribe.html', context)
 
 
 def funder_bounties_redirect(request):
@@ -404,6 +221,7 @@ def funder_bounties(request):
         'slides': slides,
         'slideDurationInMs': 6000,
         'active': 'bounties_funder',
+        'avatar_url': request.build_absolute_uri(static('v2/images/twitter_cards/tw_cards-01.png')),
         'hide_newsletter_caption': True,
         'hide_newsletter_consent': True,
         'gitcoin_description': gitcoin_description,
@@ -549,6 +367,7 @@ def contributor_bounties(request, tech_stack):
 
     # tech_stack = '' #uncomment this if you wish to disable contributor specific LPs
     context = {
+        'avatar_url': request.build_absolute_uri(static('v2/images/twitter_cards/tw_cards-01.png')),
         'onboard_slides': onboard_slides,
         'slides': slides,
         'slideDurationInMs': 6000,
@@ -618,10 +437,8 @@ def how_it_works(request, work_type):
 
 
 def robotstxt(request):
-    hidden_profiles = list(JSONStore.objects.get(view='hidden_profiles').data)
     context = {
         'settings': settings,
-        'hidden_profiles': hidden_profiles,
     }
     return TemplateResponse(request, 'robots.txt', context, content_type='text')
 
@@ -1178,6 +995,9 @@ def get_specific_activities(what, trending_only, user, after_pk, request=None):
         relevant_grants = get_my_grants(user.profile) if is_auth else []
     elif what == 'my_threads' and is_auth:
         activities = user.profile.subscribed_threads.all().order_by('-created') if is_auth else []
+    elif what == 'my_favorites' and is_auth:
+        favorites = user.favorites.all().values_list('activity_id')
+        activities = Activity.objects.filter(id__in=Subquery(favorites)).order_by('-created')
     elif 'keyword-' in what:
         keyword = what.split('-')[1]
         relevant_profiles = Profile.objects.filter(keywords__icontains=keyword)
@@ -1235,7 +1055,7 @@ def get_specific_activities(what, trending_only, user, after_pk, request=None):
         if what == 'everywhere':
             view_count_threshold = 40
         activities = activities.filter(view_count__gt=view_count_threshold)
-    
+
     return activities
 
 
@@ -1286,7 +1106,9 @@ def activity(request):
 
 @ratelimit(key='ip', rate='30/m', method=ratelimit.UNSAFE, block=True)
 def create_status_update(request):
+    issue_re = re.compile(r'^(?:https?://)?(?:github\.com)/(?:[\w,\-,\_]+)/(?:[\w,\-,\_]+)/issues/(?:[\d]+)')
     response = {}
+
     if request.POST:
         profile = request.user.profile
         title = request.POST.get('data')
@@ -1299,6 +1121,7 @@ def create_status_update(request):
             'metadata': {
                 'title': title,
                 'ask': request.POST.get('ask'),
+                'fund_able': provider and issue_re.match(provider) != None,
                 'resource': {
                     'type': resource,
                     'provider': provider,
@@ -1551,7 +1374,7 @@ def slack(request):
             try:
                 validate_email(email)
                 get_or_save_email_subscriber(email, 'slack', send_slack_invite=False)
-                response = invite_to_slack(email)
+                response = invite_to_slack(email, True)
 
                 if not response.get('ok'):
                     context['msg'] = response.get('error', _('Unknown error'))
@@ -1699,120 +1522,18 @@ def increase_funding_limit_request(request):
 
     return TemplateResponse(request, 'increase_funding_limit_request_form.html', params)
 
-@staff_member_required
-def tribes(request):
-    plans= [
-        {
-            'type': 'lite',
-            'img': static('v2/images/tribes/landing/plan-lite.svg'),
-            'price': '10k',
-            'features': [
-                '1 Hackthon Credit'
-            ],
-            'features_na': [
-                'Access to Gitcoin Pro Tools'
-            ]
-        },
-        {
-            'type': 'pro',
-            'img': static('v2/images/tribes/logo.svg'),
-            'discount': '40%',
-            'price': '6k',
-            'features': [
-                {
-                    'title': '3 Hackathon Credits',
-                    'info': '18k year total'
-                },
-                'Access to Gitcoin Pro Tools'
-            ]
-        },
-        {
-            'type': 'launch',
-            'img': static('v2/images/tribes/landing/plan-launch.svg'),
-            'price': '4k',
-            'features': [
-                {
-                    'title': '5 Hackathon Credits',
-                    'info': '20k year total'
-                },
-                'Access to Gitcoin Pro Tools'
-            ]
-        }
-    ]
 
-    tribes = JSONStore.objects.get(view='tribes', key='tribes').data
-
-    testimonials = [
-        {
-            'text': 'I had a lot of fun (during Beyond Blockchain) meeting people and building tangible rapidly. Glad to have a winning submission!',
-            'author': 'VirajA',
-            'designation': 'Hacker',
-            'photo': static('v2/images/tribes/landing/viraj.png')
-        },
-        {
-            'text': 'Gitcoin has a fantastic community that is our target audience -- Web 3 developers who want to build.',
-            'author': 'Sam Williams',
-            'designation': 'CEO, Arweave',
-            'photo':  static('v2/images/tribes/landing/sam.jpg'),
-            'org_photo': static('v2/images/project_logos/arweave.svg')
-        },
-        {
-            'text': 'Relationships with developers" is our guiding light. For both developers and ourselves, it’s great to work with GItcoin to see more working examples using Portis.',
-            'author': 'Scott Gralnick',
-            'designation': 'Co-Founder, Portis',
-            'photo': static('v2/images/tribes/landing/scott.png'),
-            'org_photo': static('v2/images/project_logos/portis.png')
-        }
-    ]
-
-    reasons = [
-        {
-            'title': 'Hackathon',
-            'img': static('v2/images/tribes/landing/hackathon.svg'),
-            'info': 'See meaningful projects come to life on your dapp'
-        },
-        {
-            'title': 'Suggest Bounty',
-            'img': static('v2/images/tribes/landing/suggest.svg'),
-            'info': 'Get bottoms up ideas from passionate contributors'
-        },
-        {
-            'title': 'Grow Tribe',
-            'img': static('v2/images/tribes/landing/grow.svg'),
-            'info': 'Work seamlessly with your core contributors'
-        },
-        {
-            'title': 'Workshops',
-            'img': static('v2/images/tribes/landing/workshop.svg'),
-            'info': 'Host workshops and learn together'
-        },
-        {
-            'title': 'Chat',
-            'img': static('v2/images/tribes/landing/chat.svg'),
-            'info': 'Direct connection to your trusted tribe'
-        },
-        {
-            'title': 'Town Square',
-            'img': static('v2/images/tribes/landing/townsquare.svg'),
-            'info': 'Broadcast your priorities and engagey our tribe'
-        },
-        {
-            'title': 'Payout/Fund',
-            'img': static('v2/images/tribes/landing/payout.svg'),
-            'info': 'Easily co-manage hackathons with your team'
-        },
-        {
-            'title': 'Stats Report',
-            'img': static('v2/images/tribes/landing/stats.svg'),
-            'info': 'See how your hackathons are performing'
-        }
-    ]
+def tribes_home(request):
+    tribes = Profile.objects.filter(is_org=True).annotate(followers=Count('follower')).order_by('-followers')[:8]
 
     context = {
-        'plans': plans,
+        'avatar_url': request.build_absolute_uri(static('v2/images/twitter_cards/tw_cards-07.png')),
+        'testimonials': testimonials(),
+        'reasons': reasons(),
+        'articles': articles(),
+        'press': press(),
         'tribes': tribes,
-        'testimonials': testimonials,
-        'reasons': reasons
+        'show_sales_action': True,
     }
 
     return TemplateResponse(request, 'tribes/landing.html', context)
